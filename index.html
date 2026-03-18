@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Paper Windmill</title>
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: #87CEEB;
+            margin: 0;
+            overflow: hidden;
+            font-family: sans-serif;
+        }
+
+        /* Mic Button Styling */
+        #mic-btn {
+            position: absolute;
+            top: 30px;
+            padding: 12px 24px;
+            font-size: 16px;
+            background-color: #fff;
+            border: 2px solid #333;
+            border-radius: 8px;
+            cursor: pointer;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            z-index: 10;
+            transition: background-color 0.2s;
+        }
+
+        #mic-btn:hover {
+            background-color: #f0f0f0;
+        }
+
+        .windmill-container {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .stick {
+            width: 10px;
+            height: 250px;
+            background-color: #d2b48c;
+            border-radius: 5px;
+            margin-top: -20px;
+            z-index: 1;
+        }
+
+        .windmill {
+            width: 200px;
+            height: 200px;
+            position: relative;
+            cursor: grab;
+            z-index: 2;
+            touch-action: none; 
+        }
+
+        .windmill:active { cursor: grabbing; }
+
+        .blade {
+            position: absolute;
+            width: 0;
+            height: 0;
+            border-style: solid;
+        }
+
+        .blade-1 { border-width: 0 50px 100px 50px; border-color: transparent transparent #ff6b6b transparent; top: 0; left: 50px; }
+        .blade-2 { border-width: 50px 0 50px 100px; border-color: transparent transparent transparent #4ecdc4; top: 50px; right: 0; }
+        .blade-3 { border-width: 100px 50px 0 50px; border-color: #ffe66d transparent transparent transparent; bottom: 0; left: 50px; }
+        .blade-4 { border-width: 50px 100px 50px 0; border-color: transparent #1a535c transparent transparent; top: 50px; left: 0; }
+
+        .pin {
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            background-color: #fff;
+            border-radius: 50%;
+            top: 90px;
+            left: 90px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+            z-index: 3;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+
+    <button id="mic-btn">Enable Microphone (Blow to Spin!)</button>
+
+    <div class="windmill-container">
+        <div class="windmill" id="windmill">
+            <div class="blade blade-1"></div>
+            <div class="blade blade-2"></div>
+            <div class="blade blade-3"></div>
+            <div class="blade blade-4"></div>
+            <div class="pin"></div>
+        </div>
+        <div class="stick"></div>
+    </div>
+
+    <script>
+        const windmill = document.getElementById('windmill');
+        const micBtn = document.getElementById('mic-btn');
+        
+        // --- TOUCH & DRAG PHYSICS ---
+        let isDragging = false;
+        let isAnimating = false;
+        let currentRotation = 0;
+        let lastAngle = 0;
+        let velocity = 0;
+        let animationFrameId;
+        const friction = 0.96; 
+
+        function getAngle(e) {
+            const rect = windmill.getBoundingClientRect();
+            const centerX = rect.left + rect.width / 2;
+            const centerY = rect.top + rect.height / 2;
+            const x = e.clientX - centerX;
+            const y = e.clientY - centerY;
+            return Math.atan2(y, x) * (180 / Math.PI);
+        }
+
+        windmill.addEventListener('pointerdown', (e) => {
+            isDragging = true;
+            windmill.setPointerCapture(e.pointerId);
+            cancelAnimationFrame(animationFrameId);
+            isAnimating = false;
+            lastAngle = getAngle(e);
+            velocity = 0; 
+        });
+
+        windmill.addEventListener('pointermove', (e) => {
+            if (!isDragging) return;
+            const currentPosAngle = getAngle(e);
+            let deltaAngle = currentPosAngle - lastAngle;
+
+            if (deltaAngle > 180) deltaAngle -= 360;
+            if (deltaAngle < -180) deltaAngle += 360;
+
+            currentRotation += deltaAngle;
+            velocity = deltaAngle; 
+            lastAngle = currentPosAngle;
+
+            windmill.style.transform = `rotate(${currentRotation}deg)`;
+        });
+
+        const endDrag = (e) => {
+            if (!isDragging) return;
+            isDragging = false;
+            windmill.releasePointerCapture(e.pointerId);
+            applyInertia();
+        };
+
+        windmill.addEventListener('pointerup', endDrag);
+        windmill.addEventListener('pointercancel', endDrag);
+
+        function applyInertia() {
+            if (Math.abs(velocity) > 0.05) {
+                isAnimating = true;
+                currentRotation += velocity;
+                windmill.style.transform = `rotate(${currentRotation}deg)`;
+                velocity *= friction; 
+                animationFrameId = requestAnimationFrame(applyInertia);
+            } else {
+                isAnimating = false;
+                velocity = 0;
+            }
+        }
+
+        // --- MICROPHONE BLOW DETECTION ---
+        let audioContext;
+        let analyser;
+        let microphone;
+
+        micBtn.addEventListener('click', async () => {
+            try {
+                // Ask user for mic permission
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                
+                // Set up the audio analyzer
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                analyser = audioContext.createAnalyser();
+                analyser.fftSize = 256;
+                
+                microphone = audioContext.createMediaStreamSource(stream);
+                microphone.connect(analyser);
+                
+                // Hide the button once enabled
+                micBtn.style.display = 'none';
+                
+                // Start listening for breath
+                detectBlow();
+            } catch (err) {
+                alert("Microphone access is required to blow on the windmill!");
+                console.error(err);
+            }
+        });
+
+        function detectBlow() {
+            const bufferLength = analyser.frequencyBinCount;
+            const dataArray = new Uint8Array(bufferLength);
+            
+            function updateVolume() {
+                analyser.getByteFrequencyData(dataArray);
+                
+                // Calculate average volume from the mic
+                let sum = 0;
+                for(let i = 0; i < bufferLength; i++) {
+                    sum += dataArray[i];
+                }
+                let averageVolume = sum / bufferLength;
+
+                // If volume crosses a threshold (e.g., a sharp blow)
+                const blowThreshold = 50; // Adjust this number to make it more or less sensitive
+                
+                if (averageVolume > blowThreshold) {
+                    // Add to the velocity based on how hard they blow
+                    velocity += (averageVolume - blowThreshold) * 0.05; 
+                    
+                    // Cap the maximum speed so it doesn't spin out of control
+                    if (velocity > 30) velocity = 30; 
+
+                    // If it isn't currently animating and we aren't dragging it, kickstart the spin
+                    if (!isAnimating && !isDragging) {
+                        applyInertia();
+                    }
+                }
+                
+                // Keep checking the mic volume continuously
+                requestAnimationFrame(updateVolume);
+            }
+            
+            updateVolume();
+        }
+    </script>
+</body>
+</html>
